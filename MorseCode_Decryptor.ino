@@ -13,7 +13,9 @@ ESP8266WebServer server(80);
 const int dotDuration = 250;  // Hold for less than 250ms for a dot
 const int dashDuration = 500; // Hold for more than 500ms for a dash
 const int letterGap = 1000;   // Wait 1 second for next letter
-const int wordGap = 2000;     // Wait 2 seconds for space
+const int wordGap = 5000;     // Wait 2 seconds for space
+const int deleteDuration = 3000;  // Hold for 3 seconds to delete a letter
+
 
 unsigned long buttonPressStart = 0;
 unsigned long lastButtonRelease = 0;
@@ -22,10 +24,29 @@ String currentEnglishText = "";
 String webMorseOutput = "";
 
 const String MORSE_TO_CHAR[] = {
-  ".-", "-...", "-.-.", "-..", ".", "..-.", "--.", "....", "..", ".---",
-  "-.-", ".-..", "--", "-.", "---", ".--.", "--.-", ".-.", "...", "-",
-  "..-", "...-", ".--", "-..-", "-.--", "--.."
+  ".-", "-...", "-.-.", "-..", ".", "..-.", "--.", "....", "..", ".---",  // A-J
+  "-.-", ".-..", "--", "-.", "---", ".--.", "--.-", ".-.", "...", "-",    // K-T
+  "..-", "...-", ".--", "-..-", "-.--", "--..",                            // U-Z
+  "-----", ".----", "..---", "...--", "....-", ".....", "-....", "--...", "---..", "----." // 0-9
 };
+
+char morseToChar(String morse) {
+  for (int i = 0; i < 26; i++) {
+    if (MORSE_TO_CHAR[i] == morse) return char('A' + i);  // Letters A-Z
+  }
+  for (int i = 0; i < 10; i++) {
+    if (MORSE_TO_CHAR[26 + i] == morse) return char('0' + i);  // Numbers 0-9
+  }
+  return '\0'; // Return null character if not found
+}
+
+String charToMorse(char c) {
+  if (c >= 'A' && c <= 'Z') return MORSE_TO_CHAR[c - 'A'];  // A-Z
+  if (c >= 'a' && c <= 'z') return MORSE_TO_CHAR[c - 'a'];  // a-z (converted to uppercase)
+  if (c >= '0' && c <= '9') return MORSE_TO_CHAR[26 + (c - '0')];  // 0-9
+  if (c == ' ') return "/";  // Space
+  return "";
+}
 
 void handleRoot() {
   String html = R"(
@@ -198,7 +219,6 @@ void setup() {
   lcd.clear();
 }
 
-// Add this new function
 void handleReset() {
   currentEnglishText = "";
   currentMorseSequence = "";
@@ -213,7 +233,6 @@ void loop() {
   delay(10);
 }
 
-// Replace handleMorseInput() with this updated version
 void handleMorseInput() {
   static bool lastButtonState = HIGH;
   bool buttonState = digitalRead(buttonPin);
@@ -231,7 +250,13 @@ void handleMorseInput() {
   if (buttonState == HIGH && lastButtonState == LOW) {
     unsigned long pressDuration = currentTime - buttonPressStart;
     if (pressDuration > 50) {  // Debounce
-      if (pressDuration < dashDuration) {
+      if (pressDuration >= deleteDuration) {
+        // DELETE LAST CHARACTER if held for 3+ seconds
+        if (currentEnglishText.length() > 0) {
+          currentEnglishText.remove(currentEnglishText.length() - 1);
+          Serial.println("Deleted last character");
+        }
+      } else if (pressDuration < dashDuration) {
         currentMorseSequence += ".";
         Serial.println("DOT added");
       } else {
@@ -242,8 +267,8 @@ void handleMorseInput() {
     }
     lastButtonRelease = currentTime;
   }
-  
-  // Letter gap detection
+
+  // Letter gap detection (1 sec)
   if (buttonState == HIGH && !letterProcessed && 
       (currentTime - lastButtonRelease) > letterGap && 
       currentMorseSequence.length() > 0) {
@@ -255,58 +280,57 @@ void handleMorseInput() {
     currentMorseSequence = "";
     letterProcessed = true;
   }
-  
-  // Word gap detection
-  // static unsigned long lastSpaceTime = 0;
-  // if (buttonState == HIGH && (currentTime - lastButtonRelease) > wordGap && 
-  //     (currentTime - lastSpaceTime) > wordGap) {
-  //   currentEnglishText += " ";
-  //   Serial.println("Space added");
-  //   lastSpaceTime = currentTime;
-  // }
-  
+
+  // Word gap detection (7 sec for space)
+  if (buttonState == HIGH && 
+      (currentTime - lastButtonRelease) > wordGap && 
+      currentEnglishText.length() > 0 && 
+      currentEnglishText[currentEnglishText.length() - 1] != ' ') {
+    currentEnglishText += " ";
+    Serial.println("Space added");
+  }
+
   lastButtonState = buttonState;
 }
 
-char morseToChar(String morse) {
-  for (int i = 0; i < 26; i++) {
-    if (MORSE_TO_CHAR[i] == morse) return char('A' + i);
-  }
-  return '\0';
-}
-
-String charToMorse(char c) {
-  if (c >= 'A' && c <= 'Z') return MORSE_TO_CHAR[c - 'A'];
-  if (c >= 'a' && c <= 'z') return MORSE_TO_CHAR[c - 'a'];
-  if (c == ' ') return "/";
-  return "";
-}
-
 void updateDisplay() {
-  static String lastLine1 = "";
-  static String lastLine2 = "";
-  
+  static unsigned long lastScrollTime = 0;
+  static int scrollIndex1 = 0;
+  static int scrollIndex2 = 0;
+  const int scrollDelay = 700;  // Increased delay for slower scrolling
+
   String line1 = currentEnglishText;
   String line2 = webMorseOutput;
-  
-  if (line1.length() > 16) line1 = line1.substring(line1.length() - 16);
-  if (line2.length() > 16) line2 = line2.substring(line2.length() - 16);
-  
-  if (line1 != lastLine1 || line2 != lastLine2) {
-    lcd.clear();
-    lcd.setCursor(0, 0); 
-    lcd.print(line1);
-    lcd.setCursor(0, 1);
-    lcd.print(line2);
-    
-    Serial.println("\nLCD Update:");
-    Serial.println("Line 1: " + line1);
-    Serial.println("Line 2: " + line2);
-    
-    lastLine1 = line1;
-    lastLine2 = line2;
+
+  // If text is longer than 16 chars, enable scrolling
+  if (line1.length() > 16) {
+    if (millis() - lastScrollTime > scrollDelay) {
+      scrollIndex1 = (scrollIndex1 + 1) % (line1.length() + 1);
+      lastScrollTime = millis();
+    }
+    line1 = line1.substring(scrollIndex1, scrollIndex1 + 16);
   }
+
+  if (line2.length() > 16) {
+    if (millis() - lastScrollTime > scrollDelay) {
+      scrollIndex2 = (scrollIndex2 + 1) % (line2.length() + 1);
+      lastScrollTime = millis();
+    }
+    line2 = line2.substring(scrollIndex2, scrollIndex2 + 16);
+  }
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(line1);
+  lcd.setCursor(0, 1);
+  lcd.print(line2);
+
+  Serial.println("\nLCD Update:");
+  Serial.println("Line 1: " + line1);
+  Serial.println("Line 2: " + line2);
 }
+
+
 
 void handleTranslate() {
   if (server.hasArg("text")) {
